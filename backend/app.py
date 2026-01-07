@@ -1,6 +1,7 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
 from routes.properties import properties_bp
+from routes.scrape import scrape_bp
 
 app = Flask(__name__)
 
@@ -12,6 +13,7 @@ CORS(
 
 # ✅ Register blueprints BEFORE running the app
 app.register_blueprint(properties_bp)
+app.register_blueprint(scrape_bp)
 
 @app.get("/health")
 def health():

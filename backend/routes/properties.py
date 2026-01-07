@@ -1,8 +1,10 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import or_
+from sqlalchemy.orm import selectinload
 
-from models import Property
-from db import SessionLocal  # or db.session if you use Flask-SQLAlchemy
+from models import Property, AnalysisResult
+from db import SessionLocal
+from decimal import Decimal
 
 properties_bp = Blueprint("properties", __name__)
 
@@ -33,7 +35,6 @@ def _get_float(name: str):
 
 @properties_bp.get("/properties")
 def get_properties():
-    print("HIT /properties")
     try:
         page = _get_int("page", 1, min_value=1)
         page_size = _get_int("page_size", 20, min_value=1, max_value=100)
@@ -86,3 +87,131 @@ def get_properties():
         })
     finally:
         session.close()
+
+@properties_bp.get("/properties/<int:property_id>")
+def get_property(property_id: int):
+    session = SessionLocal()
+    try:
+        prop = (
+            session.query(Property)
+            .options(selectinload(Property.photos))
+            .filter(Property.id == property_id)
+            .one_or_none()
+        )
+
+        if prop is None:
+            return jsonify({"error": f"Property {property_id} not found"}), 404
+
+        analysis = (
+            session.query(AnalysisResult)
+            .filter(AnalysisResult.property_id == property_id)
+            .one_or_none()
+        )
+
+        return jsonify({
+            **prop.to_dict(),
+            "photos": [p.to_dict() for p in (prop.photos or [])],
+            "analysis": analysis.to_dict() if analysis else None,
+        })
+    
+    finally:
+        session.close()
+
+@properties_bp.post("/properties/<int:property_id>/analyze")
+def analyze_property(property_id: int):
+    session = SessionLocal()
+    try:
+        prop = session.query(Property).filter(Property.id == property_id).one_or_none()
+        if prop is None:
+            return jsonify({"error": f"Property {property_id} not found"}), 404
+
+        score_total, score_breakdown, reasons = compute_analysis(prop)
+
+        analysis = (
+            session.query(AnalysisResult)
+            .filter(AnalysisResult.property_id == property_id)
+            .one_or_none()
+        )
+
+        if analysis is None:
+            analysis = AnalysisResult(
+                property_id=property_id,
+                score_total=Decimal(str(score_total)),
+                score_breakdown=score_breakdown,
+                reasons=reasons,
+            )
+            session.add(analysis)
+        else:
+            analysis.score_total = Decimal(str(score_total))
+            analysis.score_breakdown = score_breakdown
+            analysis.reasons = reasons
+            analysis.analyzed_at = func.now()
+            analysis.updated_at = func.now()
+
+        session.commit()
+        session.refresh(analysis)
+
+        return jsonify(analysis.to_dict())
+    except Exception as e:
+        session.rollback()
+        return jsonify({"error": "Analyze failed", "details": str(e)}), 500
+    finally:
+        session.close()
+
+
+def compute_analysis(prop: Property):
+    # Baseline metrics (purely from property fields for now)
+    price = float(prop.price) if prop.price is not None else None
+    beds = prop.beds
+    sqft = prop.sqft
+
+    desc = (prop.description or "").lower()
+    rehab_per_sqft = 35 if any(w in desc for w in ["fixer", "rehab", "needs", "tlc"]) else 20
+    rehab_estimate = (sqft * rehab_per_sqft) if sqft else (price * 0.08 if price else None)
+
+    arv_estimate = ((price + rehab_estimate) * 1.10) if (price and rehab_estimate) else None
+    rent_estimate = max(1200, (beds or 0) * 650 + (sqft or 0) * 0.40) if (beds or sqft) else None
+
+    # Ratios
+    rent_to_price = ((rent_estimate * 12) / price) if (rent_estimate and price) else None
+    arv_to_price = (arv_estimate / price) if (arv_estimate and price) else None
+
+    # Score components (0-100 total, simple heuristic)
+    score = 0.0
+    reasons = []
+
+    if rent_to_price is not None:
+        # 0.20 annual rent/price ~= strong
+        score += min(45.0, rent_to_price * 150.0)
+        reasons.append(f"Rent-to-price ratio: {rent_to_price:.3f}")
+
+    if arv_to_price is not None:
+        score += min(35.0, max(0.0, (arv_to_price - 1.0) * 140.0))
+        reasons.append(f"ARV-to-price ratio: {arv_to_price:.3f}")
+
+    if beds is not None:
+        score += min(10.0, beds * 2.0)
+        reasons.append(f"Bedrooms: {beds}")
+
+    # Penalties for missing data
+    if price is None:
+        score -= 15.0
+        reasons.append("Missing price")
+    if sqft is None:
+        score -= 5.0
+        reasons.append("Missing sqft")
+
+    score = max(0.0, min(100.0, score))
+
+    score_breakdown = {
+        "price": price,
+        "beds": beds,
+        "sqft": sqft,
+        "rehab_estimate": rehab_estimate,
+        "arv_estimate": arv_estimate,
+        "rent_estimate": rent_estimate,
+        "rent_to_price": rent_to_price,
+        "arv_to_price": arv_to_price,
+    }
+
+    return score, score_breakdown, reasons

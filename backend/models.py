@@ -63,6 +63,33 @@ class Property(Base):
         cascade="all, delete-orphan",
     )
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "listing_source": self.listing_source,
+            "listing_url": self.listing_url,
+            "address": self.address,
+            "city": self.city,
+            "state": self.state,
+            "zip": self.zip,
+            "price": float(self.price) if self.price is not None else None,
+            "beds": self.beds,
+            "baths": float(self.baths) if self.baths is not None else None,
+            "sqft": self.sqft,
+            "description": self.description,
+            "scraped_at": self.scraped_at.isoformat() if self.scraped_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+    }
+    
+    def to_detail_dict(self, analysis=None):
+        return {
+            **self.to_dict(),
+            "photos": [p.to_dict() for p in (self.photos or [])],
+            "analysis": analysis.to_dict() if analysis else None,
+        }
+
+
 
 
 #
@@ -89,6 +116,22 @@ class PropertyPhoto(Base):
     # Relationship
     property = relationship("Property", back_populates="photos")
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "property_id": self.property_id,
+            "photo_url": self.photo_url,
+            "sort_order": self.sort_order,
+        }
+    
+    def to_detail_dict(self, analysis=None):
+        return {
+            **self.to_dict(),
+            "photos": [p.to_dict() for p in (self.photos or [])],
+            "analysis": analysis.to_dict() if analysis else None,
+        }
+
+
 
 
 #
@@ -107,28 +150,39 @@ class AnalysisResult(Base):
         Integer,
         ForeignKey("properties.id", ondelete="CASCADE"),
         nullable=False,
+        unique=True,  # ✅ one row per property
     )
 
     score_total = Column(Numeric(5, 2), nullable=False)
-
     score_breakdown = Column(JSONB, nullable=False)
     reasons = Column(JSONB, nullable=True)
 
-    analyzed_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-    )
+    analyzed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    # Relationship
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
     property = relationship("Property", back_populates="analysis_results")
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "property_id": self.property_id,
+            "score_total": float(self.score_total),
+            "score_breakdown": self.score_breakdown,
+            "reasons": self.reasons,
+            "analyzed_at": self.analyzed_at.isoformat() if self.analyzed_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 
 
 #
 #
 #
-# PropertyPhoto
+# ScrapeRun
 #
 #
 #
@@ -148,6 +202,16 @@ class ScrapeRun(Base):
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
     properties_found = Column(Integer, nullable=False, default=0)
-    errors_count = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
 
     error_samples = Column(JSONB, nullable=True)
+
+    max_results = Column(Integer, nullable=False, default=50)
+
+#
+#
+#
+# ScrapeRun
+#
+#
+#
