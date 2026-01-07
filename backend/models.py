@@ -168,7 +168,7 @@ class AnalysisResult(Base):
         return {
             "id": self.id,
             "property_id": self.property_id,
-            "score_total": float(self.score_total),
+            "score_total": float(self.score_total) if self.score_total is not None else None,
             "score_breakdown": self.score_breakdown,
             "reasons": self.reasons,
             "analyzed_at": self.analyzed_at.isoformat() if self.analyzed_at else None,

@@ -5,6 +5,7 @@ from sqlalchemy.orm import selectinload
 from models import Property, AnalysisResult
 from db import SessionLocal
 from decimal import Decimal
+from api_errors import ApiError
 
 properties_bp = Blueprint("properties", __name__)
 
@@ -16,13 +17,31 @@ def _get_int(name: str, default: int, *, min_value=None, max_value=None):
         try:
             value = int(raw)
         except ValueError:
-            raise ValueError(f"'{name}' must be an integer")
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message=f"'{name}' must be an integer",
+                status=400,
+                details={"field": name},
+            )
 
     if min_value is not None and value < min_value:
-        value = min_value
+        raise ApiError(
+            code="VALIDATION_ERROR",
+            message=f"'{name}' must be >= {min_value}",
+            status=400,
+            details={"field": name, "min": min_value},
+        )
+
     if max_value is not None and value > max_value:
-        value = max_value
+        raise ApiError(
+            code="VALIDATION_ERROR",
+            message=f"'{name}' must be <= {max_value}",
+            status=400,
+            details={"field": name, "max": max_value},
+        )
+
     return value
+
 
 def _get_float(name: str):
     raw = request.args.get(name)
@@ -44,7 +63,7 @@ def get_properties():
         max_price = _get_float("max_price")
         min_beds = _get_int("min_beds", 0, min_value=0)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        raise ApiError(code="VALIDATION_ERROR", message=str(e), status=400)
 
     session = SessionLocal()
     try:
